@@ -213,6 +213,10 @@ def _sql_str(s: str) -> str:
 def _uses_edge_table(h: HierExpr) -> bool:
     return h.rel is not None
 
+def _hier_subquery(h: HierExpr) -> str:
+    select = "SELECT DISTINCT id" if _uses_edge_table(h) else "SELECT id"
+    return f"{select} FROM {_cte_name(h.op, h.term, h.depth, h.rel)}"
+
 def _make_cte(h: HierExpr) -> tuple[str, str]:
     name = _cte_name(h.op, h.term, h.depth, h.rel)
     q    = _sql_str(h.term)
@@ -220,56 +224,61 @@ def _make_cte(h: HierExpr) -> tuple[str, str]:
 
     if h.op == 'UNDER':
         if _uses_edge_table(h):
-            # General edge table path expansion may revisit DAG nodes via multiple parents.
-            body = (f"  SELECT id FROM Disease WHERE name = '{q}'\n"
-                    f"  UNION\n"
-                    f"  SELECT e.child_id\n"
+            # General MONDO/GO-style traversals use a per-path visited list and defer
+            # deduplication to the consuming subquery instead of paying UNION costs
+            # at every recursive step.
+            body = (f"  SELECT id, ARRAY[id] AS path FROM Disease WHERE name = '{q}'\n"
+                    f"  UNION ALL\n"
+                    f"  SELECT e.child_id, s.path || e.child_id\n"
                     f"  FROM   DiseaseEdge e\n"
                     f"  JOIN   {name} s ON e.parent_id = s.id\n"
-                    f"  WHERE  e.rel = '{rel}'")
+                    f"  WHERE  e.rel = '{rel}'\n"
+                    f"    AND  NOT e.child_id = ANY(s.path)")
         else:
             # The sample adjacency-list schema is a tree, so UNION ALL is sufficient here.
             body = (f"  SELECT id FROM Disease WHERE name = '{q}'\n"
                     f"  UNION ALL\n"
                     f"  SELECT d.id FROM Disease d JOIN {name} s ON d.parent_id = s.id")
-        cols = "id"
+        cols = "id, path" if _uses_edge_table(h) else "id"
 
     elif h.op == 'ANCESTORS':
         if _uses_edge_table(h):
-            body = (f"  SELECT e.parent_id AS id\n"
+            body = (f"  SELECT e.parent_id AS id, ARRAY[d.id, e.parent_id] AS path\n"
                     f"  FROM   Disease d\n"
                     f"  JOIN   DiseaseEdge e ON e.child_id = d.id\n"
                     f"  WHERE  d.name = '{q}' AND e.rel = '{rel}'\n"
                     f"  UNION ALL\n"
-                    f"  SELECT e.parent_id\n"
+                    f"  SELECT e.parent_id, a.path || e.parent_id\n"
                     f"  FROM   DiseaseEdge e\n"
                     f"  JOIN   {name} a ON e.child_id = a.id\n"
-                    f"  WHERE  e.rel = '{rel}'")
+                    f"  WHERE  e.rel = '{rel}'\n"
+                    f"    AND  NOT e.parent_id = ANY(a.path)")
         else:
             body = (f"  SELECT parent_id AS id FROM Disease WHERE name = '{q}' AND parent_id IS NOT NULL\n"
                     f"  UNION ALL\n"
                     f"  SELECT d.parent_id\n"
                     f"  FROM   Disease d JOIN {name} a ON d.id = a.id\n"
                     f"  WHERE  d.parent_id IS NOT NULL")
-        cols = "id"
+        cols = "id, path" if _uses_edge_table(h) else "id"
 
     elif h.op == 'DEPTH':
         if h.depth is None:
             raise ValueError("DEPTH requires an integer depth bound")
         if _uses_edge_table(h):
-            body = (f"  SELECT id, 0 AS depth FROM Disease WHERE name = '{q}'\n"
+            body = (f"  SELECT id, 0 AS depth, ARRAY[id] AS path FROM Disease WHERE name = '{q}'\n"
                     f"  UNION ALL\n"
-                    f"  SELECT e.child_id, s.depth + 1\n"
+                    f"  SELECT e.child_id, s.depth + 1, s.path || e.child_id\n"
                     f"  FROM   DiseaseEdge e\n"
                     f"  JOIN   {name} s ON e.parent_id = s.id\n"
-                    f"  WHERE  e.rel = '{rel}' AND s.depth < {h.depth}")
+                    f"  WHERE  e.rel = '{rel}' AND s.depth < {h.depth}\n"
+                    f"    AND  NOT e.child_id = ANY(s.path)")
         else:
             body = (f"  SELECT id, 0 AS depth FROM Disease WHERE name = '{q}'\n"
                     f"  UNION ALL\n"
                     f"  SELECT d.id, s.depth + 1\n"
                     f"  FROM   Disease d JOIN {name} s ON d.parent_id = s.id\n"
                     f"  WHERE  s.depth < {h.depth}")
-        cols = "id, depth"
+        cols = "id, depth, path" if _uses_edge_table(h) else "id, depth"
 
     elif h.op == 'SIBLINGS':
         if _uses_edge_table(h):
@@ -305,9 +314,7 @@ def emit_sql(q: Query) -> str:
     where_parts = []
     for c in q.where:
         if isinstance(c, HierExpr):
-            where_parts.append(
-                f"{c.col} IN (SELECT id FROM {_cte_name(c.op, c.term, c.depth, c.rel)})"
-            )
+            where_parts.append(f"{c.col} IN ({_hier_subquery(c)})")
         else:
             where_parts.append(c)
 

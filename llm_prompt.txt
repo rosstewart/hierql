@@ -1,0 +1,393 @@
+You are participating in a readability study for a research paper comparing five query languages. Your task is to rate the readability of queries written in each language.
+Critical instruction: neutralize familiarity bias
+You have been trained on vast amounts of code and documentation. Some of these languages (SQL, Cypher, SPARQL, Datalog) are decades old and extremely well-studied; you likely find them "familiar." HierQL is a brand-new, experimental language invented for this paper — you have never seen it before. This creates an inherent bias: you may rate familiar languages as more readable simply because you recognize their patterns, not because they are objectively clearer to a new user.
+You must rate each query as if you are a new user encountering all five languages for the first time, with no prior exposure to any of them. Evaluate only on: how clearly the query communicates its intent in plain language, how self-evident the syntax is without prior knowledge, and how little mental overhead is required to parse what the query is doing. Do not give credit for familiarity.
+
+Context
+The paper introduces HierQL, a query language designed for data that is both relational and hierarchical (e.g., genomic databases with flat variant tables and DAG-structured disease ontologies). The paper compares HierQL against SQL, Datalog, Cypher, and SPARQL on 7 benchmark queries. All five languages produce identical results; only the syntax differs.
+The underlying data involves:
+
+A disease hierarchy (DAG of disease terms connected by is_a edges)
+Genes linked to diseases
+Genetic variants with measured allele frequencies
+
+
+Your task
+For each of the 7 benchmark queries below, rate each language's version of that query on a 1–5 Likert scale for readability:
+
+1 = Very hard to read; intent is unclear without deep language knowledge
+2 = Difficult; requires significant effort to parse
+3 = Moderate; readable with some effort
+4 = Clear; intent is mostly self-evident
+5 = Very easy to read; intent is immediately obvious
+
+Provide your ratings as a table with rows = queries (Q1–Q7) and columns = languages (SQL, HierQL, Datalog, Cypher, SPARQL). After the table, write 2–3 sentences of justification per language summarizing patterns you noticed across queries.
+
+Benchmark queries
+Q1 — Find variants with allele frequency < 0.001 in gene NLGN4Y
+SQL:
+sqlSELECT v.rsid, a.allele_freq
+FROM   Variant v
+JOIN   gnomAD  a ON a.variant_id = v.id
+JOIN   Gene    g ON g.id         = v.gene_id
+WHERE  g.symbol = 'NLGN4Y'
+  AND  a.allele_freq < 0.001
+ORDER  BY a.allele_freq DESC, v.rsid;
+HierQL:
+FIND variant.rsid, af.allele_freq
+FROM Gene AS gene
+JOIN Variant AS variant ON variant.gene_id = gene.id
+JOIN gnomAD AS af ON af.variant_id = variant.id
+WHERE gene.symbol = "NLGN4Y" AND af.allele_freq < 0.001
+ORDER BY af.allele_freq DESC, variant.rsid
+Datalog:
+target_gene(gid) :- gene(gid, "NLGN4Y").
+rare_variant(rsid, af) :-
+  target_gene(gid),
+  variant(vid, gid, rsid, _, _, _, _),
+  gnomad(_, vid, af, _),
+  af < 0.001.
+.output rare_variant
+Cypher:
+MATCH (g:Gene {symbol:'NLGN4Y'})<-[:BELONGS_TO]-(v:Variant)-[:IN_GNOMAD]->(a:Gnomad)
+WHERE a.allele_freq < 0.001
+RETURN v.rsid, a.allele_freq
+ORDER BY a.allele_freq DESC, v.rsid
+SPARQL:
+sparqlPREFIX bio: <http://example.org/bio#>
+SELECT ?rsid ?alleleFreq
+WHERE {
+  ?gene bio:symbol "NLGN4Y" .
+  ?variant bio:gene ?gene ;
+           bio:rsid ?rsid .
+  ?gnomad bio:variant ?variant ;
+         bio:alleleFreq ?alleleFreq .
+  FILTER (?alleleFreq < 0.001)
+}
+ORDER BY DESC(?alleleFreq) ?rsid
+
+Q2 — Count variants per gene
+SQL:
+sqlSELECT g.symbol, COUNT(*) AS n_variants
+FROM   Gene    g
+JOIN   Variant v ON v.gene_id = g.id
+GROUP  BY g.symbol
+HAVING COUNT(*) > 0
+ORDER  BY n_variants DESC, g.symbol;
+HierQL:
+FIND gene.symbol, COUNT(*) AS n_variants
+FROM Gene AS gene
+JOIN Variant AS variant ON variant.gene_id = gene.id
+GROUP BY gene.symbol
+HAVING COUNT(*) > 0
+ORDER BY n_variants DESC, gene.symbol
+Datalog:
+gene_variant_count(sym, count : count vid) :-
+  gene(gid, sym),
+  variant(vid, gid, _, _, _, _, _).
+.output gene_variant_count
+Cypher:
+MATCH (g:Gene)<-[:BELONGS_TO]-(v:Variant)
+RETURN g.symbol, count(v) AS n_variants
+ORDER BY n_variants DESC, g.symbol
+SPARQL:
+sparqlPREFIX bio: <http://example.org/bio#>
+SELECT ?symbol (COUNT(?variant) AS ?nVariants)
+WHERE {
+  ?gene bio:symbol ?symbol .
+  ?variant bio:gene ?gene .
+}
+GROUP BY ?symbol
+ORDER BY DESC(?nVariants) ?symbol
+
+Q3 — Find all disease terms that are subtypes of "gonadal disorder"
+SQL:
+sqlWITH RECURSIVE sub(id, path) AS (
+    SELECT id, ARRAY[id] AS path
+    FROM   Disease
+    WHERE  name = 'gonadal disorder'
+    UNION ALL
+    SELECT e.child_id, s.path || e.child_id
+    FROM   DiseaseEdge e
+    JOIN   sub s ON e.parent_id = s.id
+    WHERE  e.rel = 'is_a'
+      AND  NOT e.child_id = ANY(s.path)
+)
+SELECT d.name
+FROM   Disease d
+JOIN   (SELECT DISTINCT id FROM sub) s ON d.id = s.id
+ORDER  BY d.name;
+HierQL:
+FIND d.name
+FROM Disease AS d
+WHERE d.id IN DISEASES UNDER "gonadal disorder" REL = "is_a"
+ORDER BY d.name
+Datalog:
+root(id) :- disease(id, "gonadal disorder").
+descendant(id, id) :- root(id).
+descendant(child, root) :- disease_edge(parent, child, "is_a"), descendant(parent, root).
+result(name) :- descendant(id, _), disease(id, name).
+.output result
+Cypher:
+MATCH (root:Disease {name:'gonadal disorder'})<-[:IS_A*0..]-(d:Disease)
+RETURN d.name
+ORDER BY d.name
+SPARQL:
+sparqlPREFIX bio: <http://example.org/bio#>
+SELECT ?name
+WHERE {
+  ?root bio:name "gonadal disorder" .
+  ?disease bio:isA* ?root ;
+           bio:name ?name .
+}
+ORDER BY ?name
+
+Q4 — Find all ancestors of "46,XY complete gonadal dysgenesis"
+SQL:
+sqlWITH RECURSIVE anc(id, path) AS (
+    SELECT e.parent_id AS id, ARRAY[d.id, e.parent_id] AS path
+    FROM   Disease d
+    JOIN   DiseaseEdge e ON e.child_id = d.id
+    WHERE  d.name = '46,XY complete gonadal dysgenesis'
+      AND  e.rel = 'is_a'
+    UNION ALL
+    SELECT e.parent_id, a.path || e.parent_id
+    FROM   DiseaseEdge e
+    JOIN   anc a ON e.child_id = a.id
+    WHERE  e.rel = 'is_a'
+      AND  NOT e.parent_id = ANY(a.path)
+)
+SELECT d.name
+FROM   Disease d
+JOIN   (SELECT DISTINCT id FROM anc) a ON d.id = a.id
+ORDER  BY d.name;
+HierQL:
+FIND d.name
+FROM Disease AS d
+WHERE d.id IN DISEASES ANCESTORS "46,XY complete gonadal dysgenesis" REL = "is_a"
+ORDER BY d.name
+Datalog:
+target(id) :- disease(id, "46,XY complete gonadal dysgenesis").
+ancestor(parent, child) :- disease_edge(parent, child, "is_a"), target(child).
+ancestor(ancestor_id, child) :- disease_edge(ancestor_id, mid, "is_a"), ancestor(mid, child).
+result(name) :- ancestor(id, _), disease(id, name).
+.output result
+Cypher:
+MATCH (d:Disease {name:'46,XY complete gonadal dysgenesis'})-[:IS_A*1..]->(a:Disease)
+RETURN a.name
+ORDER BY a.name
+SPARQL:
+sparqlPREFIX bio: <http://example.org/bio#>
+SELECT ?name
+WHERE {
+  ?disease bio:name "46,XY complete gonadal dysgenesis" .
+  ?disease bio:isA+ ?ancestor .
+  ?ancestor bio:name ?name .
+}
+ORDER BY ?name
+
+Q5 — Find genes linked to any subtype of "gonadal disorder" with a rare variant (AF < 0.001)
+SQL:
+sqlWITH RECURSIVE sub(id, path) AS (
+    SELECT id, ARRAY[id] AS path
+    FROM   Disease
+    WHERE  name = 'gonadal disorder'
+    UNION ALL
+    SELECT e.child_id, s.path || e.child_id
+    FROM   DiseaseEdge e
+    JOIN   sub s ON e.parent_id = s.id
+    WHERE  e.rel = 'is_a'
+      AND  NOT e.child_id = ANY(s.path)
+)
+SELECT DISTINCT g.symbol, v.rsid, a.allele_freq
+FROM   Gene          g
+JOIN   Gene_Disease  gd ON gd.gene_id    = g.id
+JOIN   Variant       v  ON v.gene_id     = g.id
+JOIN   gnomAD        a  ON a.variant_id  = v.id
+WHERE  gd.disease_id IN (SELECT DISTINCT id FROM sub)
+  AND  a.allele_freq < 0.001
+ORDER  BY g.symbol, a.allele_freq DESC, v.rsid;
+HierQL:
+FIND DISTINCT gene.symbol, variant.rsid, af.allele_freq
+FROM Gene AS gene
+JOIN Gene_Disease AS gd ON gd.gene_id = gene.id
+JOIN Variant AS variant ON variant.gene_id = gene.id
+JOIN gnomAD AS af ON af.variant_id = variant.id
+WHERE gd.disease_id IN DISEASES UNDER "gonadal disorder" REL = "is_a"
+  AND af.allele_freq < 0.001
+ORDER BY gene.symbol, af.allele_freq DESC, variant.rsid
+Datalog:
+root(id) :- disease(id, "gonadal disorder").
+descendant(id, id) :- root(id).
+descendant(child, root) :- disease_edge(parent, child, "is_a"), descendant(parent, root).
+rare_gene(sym, rsid, af) :-
+  descendant(did, _),
+  gene_disease(gid, did, _),
+  gene(gid, sym),
+  variant(vid, gid, rsid, _, _, _, _),
+  gnomad(_, vid, af, _),
+  af < 0.001.
+.output rare_gene
+Cypher:
+MATCH (root:Disease {name:'gonadal disorder'})<-[:IS_A*0..]-(d:Disease)<-[:ASSOC]-(g:Gene)
+MATCH (g)<-[:BELONGS_TO]-(v:Variant)-[:IN_GNOMAD]->(a:Gnomad)
+WHERE a.allele_freq < 0.001
+RETURN DISTINCT g.symbol, v.rsid, a.allele_freq
+ORDER BY g.symbol, a.allele_freq DESC, v.rsid
+SPARQL:
+sparqlPREFIX bio: <http://example.org/bio#>
+SELECT ?symbol ?rsid ?alleleFreq
+WHERE {
+  ?root bio:name "gonadal disorder" .
+  ?disease bio:isA* ?root .
+  ?assoc bio:disease ?disease ;
+         bio:gene ?gene .
+  ?gene bio:symbol ?symbol .
+  ?variant bio:gene ?gene ;
+           bio:rsid ?rsid .
+  ?gnomad bio:variant ?variant ;
+         bio:alleleFreq ?alleleFreq .
+  FILTER (?alleleFreq < 0.001)
+}
+ORDER BY ?symbol DESC(?alleleFreq) ?rsid
+
+Q6 — Genes linked to descendants of "reproductive system disorder" with a rare variant
+SQL:
+sqlWITH RECURSIVE sub(id, path) AS (
+    SELECT id, ARRAY[id] AS path
+    FROM   Disease
+    WHERE  name = 'reproductive system disorder'
+    UNION ALL
+    SELECT e.child_id, s.path || e.child_id
+    FROM   DiseaseEdge e
+    JOIN   sub s ON e.parent_id = s.id
+    WHERE  e.rel = 'is_a'
+      AND  NOT e.child_id = ANY(s.path)
+)
+SELECT DISTINCT g.symbol
+FROM   Gene          g
+JOIN   Gene_Disease  gd ON gd.gene_id    = g.id
+JOIN   Variant       v  ON v.gene_id     = g.id
+JOIN   gnomAD        a  ON a.variant_id  = v.id
+WHERE  gd.disease_id IN (SELECT DISTINCT id FROM sub)
+  AND  a.allele_freq < 0.001
+ORDER  BY g.symbol;
+HierQL:
+FIND DISTINCT gene.symbol
+FROM Gene AS gene
+JOIN Gene_Disease AS gd ON gd.gene_id = gene.id
+JOIN Variant AS variant ON variant.gene_id = gene.id
+JOIN gnomAD AS af ON af.variant_id = variant.id
+WHERE gd.disease_id IN DISEASES UNDER "reproductive system disorder" REL = "is_a"
+  AND af.allele_freq < 0.001
+ORDER BY gene.symbol
+Datalog:
+root(id) :- disease(id, "reproductive system disorder").
+descendant(id, id) :- root(id).
+descendant(child, root) :- disease_edge(parent, child, "is_a"), descendant(parent, root).
+rare_gene(sym) :-
+  descendant(did, _),
+  gene_disease(gid, did, _),
+  gene(gid, sym),
+  variant(vid, gid, _, _, _, _, _),
+  gnomad(_, vid, af, _),
+  af < 0.001.
+.output rare_gene
+Cypher:
+MATCH (root:Disease {name:'reproductive system disorder'})<-[:IS_A*0..]-(d:Disease)<-[:ASSOC]-(g:Gene)
+MATCH (g)<-[:BELONGS_TO]-(v:Variant)-[:IN_GNOMAD]->(a:Gnomad)
+WHERE a.allele_freq < 0.001
+RETURN DISTINCT g.symbol
+ORDER BY g.symbol
+SPARQL:
+sparqlPREFIX bio: <http://example.org/bio#>
+SELECT DISTINCT ?symbol
+WHERE {
+  ?root bio:name "reproductive system disorder" .
+  ?disease bio:isA* ?root .
+  ?assoc bio:disease ?disease ;
+         bio:gene ?gene .
+  ?gene bio:symbol ?symbol .
+  ?variant bio:gene ?gene .
+  ?gnomad bio:variant ?variant ;
+         bio:alleleFreq ?alleleFreq .
+  FILTER (?alleleFreq < 0.001)
+}
+ORDER BY ?symbol
+
+Q7 — Genes linked to disease terms within 3 hops of "disorder of sexual differentiation" with a rare variant
+SQL:
+sqlWITH RECURSIVE sub(id, depth, path) AS (
+    SELECT id, 0 AS depth, ARRAY[id] AS path
+    FROM   Disease
+    WHERE  name = 'disorder of sexual differentiation'
+    UNION ALL
+    SELECT e.child_id, s.depth + 1, s.path || e.child_id
+    FROM   DiseaseEdge e
+    JOIN   sub s ON e.parent_id = s.id
+    WHERE  e.rel = 'is_a'
+      AND  s.depth < 3
+      AND  NOT e.child_id = ANY(s.path)
+)
+SELECT DISTINCT g.symbol, v.rsid, a.allele_freq
+FROM   Gene          g
+JOIN   Gene_Disease  gd ON gd.gene_id    = g.id
+JOIN   Variant       v  ON v.gene_id     = g.id
+JOIN   gnomAD        a  ON a.variant_id  = v.id
+WHERE  gd.disease_id IN (SELECT DISTINCT id FROM sub)
+  AND  a.allele_freq < 0.001
+ORDER  BY g.symbol, a.allele_freq DESC, v.rsid;
+HierQL:
+FIND DISTINCT gene.symbol, variant.rsid, af.allele_freq
+FROM Gene AS gene
+JOIN Gene_Disease AS gd ON gd.gene_id = gene.id
+JOIN Variant AS variant ON variant.gene_id = gene.id
+JOIN gnomAD AS af ON af.variant_id = variant.id
+WHERE gd.disease_id IN DISEASES DEPTH "disorder of sexual differentiation" 3 REL = "is_a"
+  AND af.allele_freq < 0.001
+ORDER BY gene.symbol, af.allele_freq DESC, variant.rsid
+Datalog:
+root(id) :- disease(id, "disorder of sexual differentiation").
+desc_depth(id, 0) :- root(id).
+desc_depth(child, depth + 1) :- disease_edge(parent, child, "is_a"), desc_depth(parent, depth), depth < 3.
+rare_gene(sym, rsid, af) :-
+  desc_depth(did, _),
+  gene_disease(gid, did, _),
+  gene(gid, sym),
+  variant(vid, gid, rsid, _, _, _, _),
+  gnomad(_, vid, af, _),
+  af < 0.001.
+.output rare_gene
+Cypher:
+MATCH (root:Disease {name:'disorder of sexual differentiation'})<-[:IS_A*0..3]-(d:Disease)<-[:ASSOC]-(g:Gene)
+MATCH (g)<-[:BELONGS_TO]-(v:Variant)-[:IN_GNOMAD]->(a:Gnomad)
+WHERE a.allele_freq < 0.001
+RETURN DISTINCT g.symbol, v.rsid, a.allele_freq
+ORDER BY g.symbol, a.allele_freq DESC, v.rsid
+SPARQL:
+sparqlPREFIX bio: <http://example.org/bio#>
+SELECT DISTINCT ?symbol ?rsid ?alleleFreq
+WHERE {
+  ?root bio:name "disorder of sexual differentiation" .
+  ?d0 bio:isA ?root .
+  OPTIONAL { ?d1 bio:isA ?d0 . }
+  OPTIONAL { ?d2 bio:isA ?d1 . }
+  VALUES ?disease { ?root ?d0 ?d1 ?d2 }
+  ?assoc bio:disease ?disease ;
+         bio:gene ?gene .
+  ?gene bio:symbol ?symbol .
+  ?variant bio:gene ?gene ;
+           bio:rsid ?rsid .
+  ?gnomad bio:variant ?variant ;
+         bio:alleleFreq ?alleleFreq .
+  FILTER (?alleleFreq < 0.001)
+}
+ORDER BY ?symbol DESC(?alleleFreq) ?rsid
+
+Output format
+Provide:
+
+A 7×5 table (rows = Q1–Q7, columns = SQL / HierQL / Datalog / Cypher / SPARQL) with a 1–5 Likert rating in each cell.
+One paragraph per language (5 total) summarizing the readability patterns you observed across queries and explaining your ratings.
+
+Remember: rate as a first-time reader with no prior exposure to any of these languages.
