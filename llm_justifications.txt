@@ -1,0 +1,75 @@
+>GPT 5.3
+
+SQL
+
+SQL queries are generally structured and somewhat readable due to consistent clause ordering (SELECT, FROM, WHERE, etc.), which helps convey intent. However, readability drops significantly for hierarchical queries (Q3–Q7), where recursive constructs (WITH RECURSIVE, path tracking) introduce substantial cognitive overhead and obscure the high-level goal. As a first-time reader, the need to mentally simulate recursion and joins makes complex queries difficult to parse.
+
+HierQL
+
+HierQL is consistently the most readable across all queries because it expresses hierarchical intent in concise, almost natural-language-like constructs (e.g., “DISEASES UNDER,” “ANCESTORS,” “DEPTH”). The syntax minimizes boilerplate and makes relationships explicit without requiring the reader to infer traversal logic. Even complex hierarchical queries remain straightforward, with very low mental overhead.
+
+Datalog
+
+Datalog is difficult to read due to its rule-based, declarative style that requires understanding multiple intermediate predicates and recursion spread across definitions. The intent is often fragmented across several lines, making it hard to immediately grasp the final goal. While simple aggregations (Q2) are somewhat clearer, most queries require significant effort to mentally assemble the logic.
+
+Cypher
+
+Cypher is relatively readable because its pattern-matching syntax visually represents relationships as graph structures, which helps convey traversal intuitively. Variable-length path expressions (e.g., *0..3) make hierarchical queries especially concise and clear. However, some symbolic elements and directionality may still require minor interpretation, preventing it from being perfectly transparent.
+
+SPARQL
+
+SPARQL has moderate readability but suffers from verbosity and less intuitive syntax (e.g., prefixes, triple patterns, semicolon chaining). While hierarchical traversal using operators like * or + is compact, the overall structure requires careful attention to variable bindings and pattern grouping. More complex queries (especially Q7) become harder to follow due to indirect constructs like OPTIONAL and VALUES.
+
+>Claude Sonnet 4.6
+Per-Language Justifications
+SQL performs adequately on flat queries (Q1–Q2), where English-like keywords (SELECT, FROM, WHERE, ORDER BY) map fairly naturally onto the intent, earning a 3. However, as soon as hierarchy is involved (Q3–Q7), the language requires a WITH RECURSIVE construct that forces the reader to mentally simulate a fixpoint computation, track an auxiliary path array to prevent cycles, and then rejoin the result — none of which is self-evident without deep prior knowledge. The intent of "find all subtypes" or "find ancestors" is completely hidden behind low-level recursion mechanics, making these queries nearly impenetrable to a newcomer and warranting a 1.
+HierQL consistently earns the highest ratings across all seven queries. For flat queries it closely mirrors natural English with FIND / FROM / JOIN / WHERE, which is marginally clearer than SQL's SELECT. Its decisive advantage appears in Q3–Q7, where built-in constructs like DISEASES UNDER "...", DISEASES ANCESTORS "...", and DISEASES DEPTH "..." 3 encode the traversal intent in a single, self-describing phrase — no recursion scaffolding, no depth counters, no cycle guards. A reader unfamiliar with any of the languages can immediately understand what these clauses request, which is the core criterion being evaluated here.
+Datalog is consistently the second-lowest scorer across all queries. The rule-based head :- body notation requires understanding that comma means logical AND, that :- means "is derived from," and that positional arguments like variant(vid, gid, rsid, _, _, _, _) carry implicit schema knowledge the reader must supply. Recursive queries (Q3–Q7) require tracing through multiple inter-dependent rule definitions before the overall intent becomes clear. That said, the logic is at least decomposed into named intermediate predicates (e.g., descendant, ancestor), which provides some structural transparency, preventing a rating of 1.
+Cypher is the strongest language for hierarchical queries after HierQL, earning 4s on Q3, Q4, Q6, and Q7. Its path pattern syntax — [:IS_A*0..] for unbounded traversal and [:IS_A*0..3] for depth-bounded traversal — is compact and relatively self-evident once one recognizes that * means "repeat." The ASCII-art arrow notation (<-[:REL]->) visualizes relationships in a way that can feel intuitive even to newcomers. Flat queries (Q1–Q2) score slightly lower than HierQL because the direction of relationship arrows requires the reader to understand graph orientation, adding modest cognitive overhead.
+SPARQL scores in the middle for simple queries (Q1–Q2) but degrades noticeably for hierarchical ones. The PREFIX declaration and ?variable syntax are idiosyncratic but internally consistent, and property path operators like bio:isA* and bio:isA+ are borrowed from regular expression notation and reasonably guessable. However, Q7 is a severe outlier: lacking true depth-bounded path syntax, SPARQL resorts to manually chained OPTIONAL blocks (?d1 bio:isA ?d0, ?d2 bio:isA ?d1) combined with a VALUES clause — a workaround that bears no resemblance to the stated intent and is essentially unreadable without expert knowledge of SPARQL's limitations, earning a 1.
+
+> Gemini 3
+Language Justifications
+SQL
+While simple filtering is clear, SQL becomes nearly illegible when handling hierarchies. The WITH RECURSIVE syntax requires the reader to understand complex procedural logic (like tracking paths in an array to avoid cycles) rather than simply stating what they want to find. For a new user, the jump from a basic SELECT to the "wall of text" required for graph traversal is a massive cognitive hurdle.
+
+HierQL
+This language is the most readable because its keywords (e.g., FIND, DISEASES UNDER, DEPTH) mirror the way a human would phrase the request. It successfully hides the technical "how" of the database behind a declarative "what," making even complex 3-hop or recursive searches immediately understandable to a layperson. The use of full words over symbols keeps the mental overhead minimal.
+
+Datalog
+Datalog feels like a puzzle that requires solving rather than a query to be read. The heavy reliance on positional arguments (the underscores _ in variant(vid, gid, rsid, _, _, _, _)) is a major barrier; a reader cannot know what those fields represent without external documentation. The logical "if-then" structure is elegant for computers but forces the human reader to manually stitch together disparate rules to see the big picture.
+
+Cypher
+Cypher is highly intuitive due to its "ASCII-art" style, where arrows (->) visually represent the relationships between data points. Using [:IS_A*0..] is a clever, concise way to denote "any distance," which is much easier to parse than SQL’s recursion. It strikes a great balance between being concise and being visual, though it uses more symbols than HierQL.
+
+SPARQL
+The readability of SPARQL suffers from significant visual noise caused by prefixes (bio:), question marks for variables, and the specific punctuation required for triple patterns. While it handles basic hierarchy well with property paths (isA*), the syntax for limited depth (like in Q7) is extremely clunky, requiring nested OPTIONAL blocks that are very difficult to follow.
+
+>Grok 4.20
+SQL
+As a first-time reader, SQL’s core relational syntax (SELECT, FROM, JOIN … ON, WHERE, ORDER BY) felt mostly self-evident because the English keywords and explicit connection conditions directly mirrored the logical steps of combining tables and filtering data. However, every hierarchical query forced a lengthy recursive CTE with UNION ALL, array-based path tracking to avoid cycles, and subqueries, which buried the simple traversal intent under heavy boilerplate and required careful tracing of multiple clauses before the purpose became clear. Aggregates in Q2 added another layer of GROUP BY / HAVING overhead that was not instantly obvious.
+HierQL
+HierQL stood out as the most readable across all queries: the relational portions used clean, declarative JOIN syntax that felt immediately natural, while the hierarchical parts employed plain-English phrases such as “DISEASES UNDER … REL = ‘is_a’”, “ANCESTORS …”, and “DEPTH … 3” that directly stated the desired traversal without any extra rules or path machinery. This seamless integration kept mental overhead minimal and made the intent of every query—whether simple filtering or complex hierarchy-plus-filter—obvious at a glance, regardless of query complexity.
+Datalog
+Datalog’s rule-based style required noticeably more effort to parse: each predicate had to be mentally unpacked (understanding shared variables, positional arguments, underscores for “don’t care,” and the separation of base vs. recursive rules), so the overall intent never felt immediately obvious even when the logic was correct. The recursive definitions for descendants or ancestors were logically clear once traced, but the multi-rule structure and lack of a single declarative “query” shape consistently demanded more cognitive steps than the other languages.
+Cypher
+Cypher’s graph-pattern syntax made hierarchical traversals surprisingly readable—the arrow directions and *0.. / *1.. / *0..3 notation visually suggested “follow these relationships any number of times,” turning complex ancestry or subtype logic into a compact, scannable pattern. Relational queries were also fairly clear once the node-label and relationship syntax was followed, though the symbolic style (parentheses, brackets, colons) still required a moment of parsing compared to plain keyword joins; overall it struck a good balance of conciseness and visual clarity.
+SPARQL
+SPARQL’s triple patterns and variable chaining allowed relationships to be spelled out explicitly, and property-path syntax (* or +) handled most hierarchical cases reasonably well, yielding moderate readability. However, the abstract ?variable notation, namespace prefixes, and especially the manual OPTIONAL chaining plus VALUES workaround for limited-depth traversal in Q7 created extra mental overhead and made the intent less self-evident than in languages with built-in path or depth constructs.
+
+>DeepSeek-V3
+Justifications per Language
+SQL
+Simple joins and aggregations (Q1, Q2) are moderately readable – keywords like SELECT, FROM, JOIN, WHERE give clear structure. However, recursive queries (Q3–Q7) become extremely difficult for a novice due to the heavy WITH RECURSIVE syntax, manual path tracking, and array operations. The mental overhead of understanding the CTE, union, and cycle prevention is high, making those queries score consistently low.
+
+HierQL
+The language consistently achieves high readability because its syntax mirrors plain English. Constructs like DISEASES UNDER "gonadal disorder" REL = "is_a" directly state the intent without requiring knowledge of recursion or graph traversal. DISEASES ANCESTORS and DISEASES DEPTH are similarly self‑explanatory. The FIND‑FROM‑JOIN‑WHERE skeleton is intuitive, and even complex multi‑table queries remain clear. A first‑time reader would grasp each query’s purpose almost immediately.
+
+Datalog
+All queries score poorly because Datalog’s logic‑programming style is opaque to a novice. The :- separation of head and body, anonymous variables (_), and predicate‑based joins require prior exposure to declarative logic. Recursive definitions (e.g., descendant(child, root) :- disease_edge(...), descendant(parent, root)) are compact but cryptic. Aggregation syntax (count : count vid) is non‑standard and confusing. Without training, a reader cannot easily map the query text to the intended result.
+
+Cypher
+Readability is moderate to good. The ASCII‑art graph patterns ((g:Gene)<-[:BELONGS_TO]-(v:Variant)) visually communicate relationships, and variable‑length paths like [:IS_A*0..] are reasonably intuitive even for a first‑time user. Simple aggregations (Q2) are very clear. However, multiple MATCH clauses (Q5–Q7) add some cognitive load, and direction arrows may be misinterpreted. Overall, Cypher performs best on path‑traversal queries (Q4, Q7) where the pattern directly mirrors the graph structure.
+
+SPARQL
+Triple patterns with ?variables are fairly clear for basic queries (Q1, Q2), and property paths (bio:isA*, bio:isA+) make hierarchical queries readable. However, the required PREFIX, curly braces, and dot notation add syntactic noise. The most serious drawback appears in Q7: expressing a depth limit (≤3 hops) forces an awkward workaround using OPTIONAL and VALUES, which is completely non‑obvious to a novice. This inconsistency lowers SPARQL’s score for more constrained navigations, even though simpler path queries are acceptable.
