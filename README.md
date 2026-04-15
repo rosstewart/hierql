@@ -1,4 +1,4 @@
-# hierql
+# HierQL: A Query Language for Hierarchical and Relational Data
 
 ## Repository layout
 
