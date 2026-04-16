@@ -21,6 +21,7 @@ Set DB_URL to your PostgreSQL 16 connection string if needed.
 
 import argparse
 import csv
+import re
 import gzip
 import json
 import math
@@ -920,8 +921,91 @@ CLASSIFICATION_RANK = {
 }
 
 
-def count_tokens(sql: str) -> int:
-    return len(sql.split())
+def count_tokens(src: str) -> int:
+    """Whitespace-split fallback (not used directly; use language-specific counters)."""
+    return len(src.split())
+
+
+def _tokenize(src: str, pattern: str) -> list:
+    """Return all non-whitespace tokens matched by `pattern`."""
+    return re.findall(pattern, src)
+
+
+def count_tokens_sql(src: str) -> int:
+    # Keywords, identifiers, dotted names, string literals, numbers,
+    # multi-char operators (<=, >=, <>, !=, ||), single-char punct.
+    # Does not split on whitespace alone — each lexical unit counts once.
+    pat = (
+        r"'[^']*'"                            # string literal
+        r'|"[^"]*"'                           # double-quoted identifier
+        r'|\d+\.\d+|\d+'                      # number
+        r'|<>|!=|<=|>=|\|\|'                  # multi-char operators
+        r'|[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*'  # identifier or dotted name
+        r'|[^\s\w]'                           # any remaining single non-whitespace char
+    )
+    return len(_tokenize(src, pat))
+
+
+def count_tokens_hierql(src: str) -> int:
+    # Same as SQL but HierQL has no double-quoted identifiers (uses " for strings)
+    # and adds -> operator. Reuse SQL tokenizer — structure is identical.
+    return count_tokens_sql(src)
+
+
+def count_tokens_datalog(src: str) -> int:
+    # Strip .decl and .input lines — these are shared schema boilerplate that
+    # appears identically in every query and does not represent query logic.
+    # .output is kept as it is part of the query specification.
+    query_lines = [
+        l for l in src.splitlines()
+        if not l.lstrip().startswith('.decl') and not l.lstrip().startswith('.input')
+    ]
+    src = '\n'.join(query_lines)
+    # Atoms: identifiers, quoted strings, numbers, :- operator, _ wildcard,
+    # punctuation (,  .  (  )  =  <  >  !=).
+    pat = (
+        r'"[^"]*"'             # string literal
+        r'|\d+\.\d+|\d+'       # number
+        r'|:-'                 # rule neck
+        r'|!='                 # not-equal
+        r'|[A-Za-z_]\w*'       # identifier / variable
+        r'|[^\s\w]'            # punct: ( ) , . : = < > ! _
+    )
+    return len(_tokenize(src, pat))
+
+
+def count_tokens_cypher(src: str) -> int:
+    # Cypher packs a lot into path patterns with almost no whitespace, e.g.:
+    #   (g:Gene {symbol:'INS'})<-[:BELONGS_TO]-(v:Variant)
+    # Tokens: identifiers/labels, quoted strings, numbers, relationship-type
+    # brackets ([ ]), node parens (( )), arrows (<-, ->, --), * range specs
+    # (e.g. *0.., *1..3), property operators ({  }  :  ,  =  .  <  >  !=).
+    pat = (
+        r"'[^']*'"             # single-quoted string
+        r'|"[^"]*"'            # double-quoted string
+        r'|\*\d*\.\.\d*'       # path quantifier: *0.., *1..3, *..
+        r'|\d+\.\d+|\d+'       # number
+        r'|<-|->|--'           # relationship arrows
+        r'|<>|!=|<=|>='        # comparison operators
+        r'|[A-Za-z_]\w*'       # keyword or identifier
+        r'|[^\s\w]'            # remaining punct: ( ) [ ] { } : , . = < > ! |
+    )
+    return len(_tokenize(src, pat))
+
+
+def count_tokens_sparql(src: str) -> int:
+    # SPARQL has prefixed names (bio:symbol), ?variables, path operators (* + |),
+    # URI literals (<...>), string literals, numbers, and standard keywords.
+    pat = (
+        r'<[^>]*>'                      # URI literal <http://...>
+        r'|"[^"]*"'                     # string literal
+        r'|\d+\.\d+|\d+'                # number
+        r'|\?[A-Za-z_]\w*'              # variable ?foo
+        r'|[A-Za-z_]\w*:[A-Za-z_]\w*'  # prefixed name bio:symbol
+        r'|[A-Za-z_]\w*'                # keyword or bare identifier
+        r'|[^\s\w]'                     # punct: { } ( ) . ; , = < > ! * + | ^
+    )
+    return len(_tokenize(src, pat))
 
 
 def count_lines(sql: str) -> int:
@@ -1519,11 +1603,11 @@ def main():
         concise_rows.append((
             qid,
             count_lines(sql),
-            count_tokens(sql),
-            count_tokens(hierql) if hierql else "—",
-            count_tokens(datalog_forms[qid]) if qid in datalog_forms else "—",
-            count_tokens(cypher_forms[qid]) if qid in cypher_forms else "—",
-            count_tokens(sparql_forms[qid]) if qid in sparql_forms else "—",
+            count_tokens_sql(sql),
+            count_tokens_hierql(hierql) if hierql else "—",
+            count_tokens_datalog(datalog_forms[qid]) if qid in datalog_forms else "—",
+            count_tokens_cypher(cypher_forms[qid]) if qid in cypher_forms else "—",
+            count_tokens_sparql(sparql_forms[qid]) if qid in sparql_forms else "—",
         ))
 
         print(f"  SQL {len(sql_rows)} rows  {_ms(sql_ms)} ms"
